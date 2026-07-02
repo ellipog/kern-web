@@ -1,15 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createServerSupabase } from "@/lib/supabase-server";
 
-type RouteParams = { params: Promise<{ id: string }> };
+type RouteParams = { params: Promise<{ id: string; version: string }> };
 
 /**
- * POST /api/plugins/:id/versions — upload a new version (owner only).
- * Body: { version, kern_compat, storage_path, sha256, size_bytes, changelog }
+ * DELETE /api/plugins/:id/versions/:version — delete a specific version (owner only).
  */
-export async function POST(request: NextRequest, { params }: RouteParams) {
+export async function DELETE(_request: NextRequest, { params }: RouteParams) {
   try {
-    const { id } = await params;
+    const { id, version } = await params;
     const supabase = await createServerSupabase();
 
     // Check auth
@@ -23,14 +22,14 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
     // Verify ownership — resolve by slug or UUID
     let { data: plugin } = await supabase
       .from("plugins")
-      .select("id, author_id, slug")
+      .select("id, author_id")
       .eq("slug", id)
       .single();
 
     if (!plugin) {
       const { data: fallback } = await supabase
         .from("plugins")
-        .select("id, author_id, slug")
+        .select("id, author_id")
         .eq("id", id)
         .single();
       plugin = fallback ?? null;
@@ -45,45 +44,28 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
 
     const pluginUuid = plugin.id;
 
-    const body = await request.json();
-    const { version, kern_compat, storage_path, sha256, size_bytes, changelog } = body;
-
-    if (!version || !storage_path || !sha256 || !size_bytes) {
-      return NextResponse.json(
-        { error: "version, storage_path, sha256, and size_bytes are required" },
-        { status: 400 },
-      );
-    }
-
-    const { data, error } = await supabase
+    // Delete the specific version
+    const { error } = await supabase
       .from("plugin_versions")
-      .insert({
-        plugin_id: pluginUuid,
-        version,
-        kern_compat,
-        storage_path,
-        sha256,
-        size_bytes,
-        changelog,
-      })
-      .select()
-      .single();
+      .delete()
+      .eq("plugin_id", pluginUuid)
+      .eq("version", version);
 
     if (error) {
       return NextResponse.json({ error: error.message }, { status: 500 });
     }
 
-    // Update plugin's updated_at timestamp
+    // Touch updated_at on the plugin
     await supabase
       .from("plugins")
       .update({ updated_at: new Date().toISOString() })
       .eq("id", pluginUuid);
 
-    return NextResponse.json(data, { status: 201 });
+    return NextResponse.json({ success: true });
   } catch (err) {
-    console.error("POST /api/plugins/[id]/versions error:", err);
+    console.error("DELETE /api/plugins/[id]/versions/[version] error:", err);
     return NextResponse.json(
-      { error: "Failed to create version" },
+      { error: "Failed to delete version" },
       { status: 500 },
     );
   }
